@@ -1,0 +1,33 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: posfiap-ingress
+  namespace: posfiap
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: "100m"   # permite upload de .zip grandes
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"     # remova se não usar cert-manager
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - posfiap.exemplo.com
+      secretName: posfiap-tls
+  rules:
+    - host: posfiap.exemplo.com
+      http:
+        paths:
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: backend
+                port:
+                  number: 8080
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: frontend
+                port:
+                  number: 80

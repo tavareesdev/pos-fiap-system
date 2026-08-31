@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: posfiap-config
+  namespace: posfiap
+data:
+  Jwt__Issuer: "PosFiap.API"
+  Jwt__Audience: "PosFiap.Frontend"
+  Jwt__ExpirationMinutes: "480"
+  Groq__Model: "openai/gpt-oss-120b"
+  Groq__BaseUrl: "https://api.groq.com/openai/v1"
+  Groq__TimeoutSeconds: "300"
+  Cors__AllowedOrigins__0: "https://posfiap.exemplo.com"
+  ASPNETCORE_ENVIRONMENT: "Production"

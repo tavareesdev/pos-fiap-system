@@ -1,0 +1,94 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend
+  namespace: posfiap
+  labels:
+    app: backend
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: backend
+  template:
+    metadata:
+      labels:
+        app: backend
+    spec:
+      containers:
+        - name: backend
+          image: posfiap/backend:latest   # substitua pela imagem publicada no seu registry
+          ports:
+            - containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: posfiap-config
+          env:
+            - name: ConnectionStrings__DefaultConnection
+              value: "Host=postgres;Port=5432;Database=$(POSTGRES_DB);Username=$(POSTGRES_USER);Password=$(POSTGRES_PASSWORD)"
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef: { name: posfiap-secrets, key: POSTGRES_USER }
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: posfiap-secrets, key: POSTGRES_PASSWORD }
+            - name: POSTGRES_DB
+              valueFrom:
+                secretKeyRef: { name: posfiap-secrets, key: POSTGRES_DB }
+            - name: Jwt__SecretKey
+              valueFrom:
+                secretKeyRef: { name: posfiap-secrets, key: JWT_SECRET_KEY }
+            - name: Groq__ApiKey
+              valueFrom:
+                secretKeyRef: { name: posfiap-secrets, key: GROQ_API_KEY }
+          resources:
+            requests: { cpu: "150m", memory: "256Mi" }
+            limits: { cpu: "750m", memory: "768Mi" }
+          readinessProbe:
+            httpGet: { path: /health, port: 8080 }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /health, port: 8080 }
+            initialDelaySeconds: 20
+            periodSeconds: 20
+      initContainers:
+        - name: wait-for-postgres
+          image: postgres:16-alpine
+          command:
+            - sh
+            - -c
+            - until pg_isready -h postgres -p 5432; do echo waiting for postgres; sleep 2; done
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend
+  namespace: posfiap
+spec:
+  selector:
+    app: backend
+  ports:
+    - port: 8080
+      targetPort: 8080
+  type: ClusterIP
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: backend-hpa
+  namespace: posfiap
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: backend
+  minReplicas: 2
+  maxReplicas: 6
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
