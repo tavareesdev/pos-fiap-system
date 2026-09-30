@@ -29,7 +29,7 @@ export default function Register() {
     <div className="auth-page">
       <div className="auth-panel">
         <div className="auth-brand">
-          <span className="auth-mark">§</span>
+          <span className="auth-mark">PF</span>
           <span className="eyebrow">Pós FIAP</span>
         </div>
         <h1 className="auth-title">Crie sua conta</h1>

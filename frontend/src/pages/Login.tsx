@@ -28,7 +28,7 @@ export default function Login() {
     <div className="auth-page">
       <div className="auth-panel">
         <div className="auth-brand">
-          <span className="auth-mark">§</span>
+          <span className="auth-mark">PF</span>
           <span className="eyebrow">Pós FIAP</span>
         </div>
         <h1 className="auth-title">Entre para revisar suas aulas</h1>

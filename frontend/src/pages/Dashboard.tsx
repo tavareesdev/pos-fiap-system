@@ -60,7 +60,7 @@ export default function Dashboard() {
     <div className="app-shell">
       <aside className="sidebar">
         <div className="sidebar-brand">
-          <span className="auth-mark">§</span>
+          <span className="auth-mark">PF</span>
           <div>
             <p className="sidebar-title">Pós FIAP</p>
             <p className="sidebar-subtitle">Resumo & Prova com IA</p>

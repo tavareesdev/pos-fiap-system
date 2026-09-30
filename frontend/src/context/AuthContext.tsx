@@ -17,7 +17,6 @@ interface AuthContextValue {
 }
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
-
 const USER_STORAGE_KEY = 'posfiap.user';
 
 export function AuthProvider({ children }: { children: ReactNode }) {
@@ -25,16 +24,54 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
-    const token = api.getToken();
-    const storedUser = localStorage.getItem(USER_STORAGE_KEY);
-    if (token && storedUser) {
-      setUser(JSON.parse(storedUser));
+    let cancelled = false;
+
+    async function restoreSession() {
+      const token = api.getToken();
+      const refreshToken = api.getRefreshToken();
+      const storedUser = localStorage.getItem(USER_STORAGE_KEY);
+
+      if (!storedUser || (!token && !refreshToken)) {
+        setIsLoading(false);
+        return;
+      }
+
+      try {
+        const parsedUser = JSON.parse(storedUser) as AuthUser;
+
+        // Se o access token expirou enquanto o usuário estava longe do site,
+        // tenta renová-lo silenciosamente usando o refresh token.
+        if (refreshToken && (!token || api.isTokenExpiredOrNearExpiry(token))) {
+          await api.refreshAccessToken();
+        }
+
+        if (!cancelled && api.getToken()) {
+          setUser(parsedUser);
+        } else if (!cancelled) {
+          clearLocalSession();
+        }
+      } catch {
+        if (!cancelled) clearLocalSession();
+      } finally {
+        if (!cancelled) setIsLoading(false);
+      }
     }
-    setIsLoading(false);
+
+    restoreSession();
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
-  function persistSession(authResponse: { token: string; name: string; email: string; userId: string }) {
-    api.saveToken(authResponse.token);
+  function clearLocalSession() {
+    api.clearSessionTokens();
+    localStorage.removeItem(USER_STORAGE_KEY);
+    setUser(null);
+  }
+
+  function persistSession(authResponse: { token: string; refreshToken: string; name: string; email: string; userId: string }) {
+    api.saveSessionTokens(authResponse);
     const authUser: AuthUser = {
       userId: authResponse.userId,
       name: authResponse.name,
@@ -55,9 +92,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   function logout() {
-    api.clearToken();
-    localStorage.removeItem(USER_STORAGE_KEY);
-    setUser(null);
+    clearLocalSession();
   }
 
   return (
