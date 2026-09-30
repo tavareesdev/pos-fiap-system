@@ -8,6 +8,16 @@ using PosFiap.Infrastructure.Persistence;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// Falha cedo e com mensagem clara se a chave JWT estiver ausente/curta
+// (HS256 exige pelo menos 128 bits; sem isso o cadastro/login dá erro 500 só na hora de gerar o token).
+var jwtSecret = builder.Configuration["Jwt:SecretKey"];
+if (string.IsNullOrWhiteSpace(jwtSecret) || Encoding.UTF8.GetByteCount(jwtSecret) < 32)
+{
+    throw new InvalidOperationException(
+        "Jwt:SecretKey ausente ou curta demais: use pelo menos 32 caracteres. " +
+        "Defina JWT_SECRET_KEY no .env (docker compose) ou a variável de ambiente Jwt__SecretKey.");
+}
+
 // ---------- Serviços ----------
 
 builder.Services.AddControllers();
@@ -69,25 +79,59 @@ builder.Services.AddAuthentication(options =>
 
 builder.Services.AddAuthorization();
 
-// CORS - permite o frontend React consumir a API
+// CORS - permite o frontend React consumir a API.
+// - Cors:AllowedOrigins: origens explícitas (ex.: a URL do frontend em produção).
+// - Cors:AllowLocalhost: aceita http(s)://localhost e 127.0.0.1 em QUALQUER porta
+//   (útil quando o Vite muda de 5173 para 5174, ou ao abrir por 127.0.0.1). Desligue em produção.
 var allowedOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>()
-    ?? new[] { "http://localhost:5173" };
+    ?? Array.Empty<string>();
+var allowLocalhost = builder.Configuration.GetValue("Cors:AllowLocalhost", true);
+
+bool IsOriginAllowed(string origin)
+{
+    if (allowedOrigins.Any(o => string.Equals(o.TrimEnd('/'), origin, StringComparison.OrdinalIgnoreCase)))
+        return true;
+
+    if (allowLocalhost && Uri.TryCreate(origin, UriKind.Absolute, out var uri))
+        return uri.Host == "localhost" || uri.Host == "127.0.0.1";
+
+    return false;
+}
 
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("Frontend", policy =>
-        policy.WithOrigins(allowedOrigins)
+        policy.SetIsOriginAllowed(IsOriginAllowed)
               .AllowAnyHeader()
               .AllowAnyMethod());
 });
 
 var app = builder.Build();
 
-// ---------- Migração automática do banco em desenvolvimento/containers ----------
+// ---------- Migração automática do banco ----------
+// Tenta algumas vezes: bancos serverless (Neon) podem levar alguns segundos para "acordar"
+// e, no docker compose, o Postgres pode ainda estar terminando de subir.
 using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<PosFiapDbContext>();
-    db.Database.Migrate();
+    var startupLogger = scope.ServiceProvider.GetRequiredService<ILogger<Program>>();
+    const int maxAttempts = 6;
+
+    for (var attempt = 1; ; attempt++)
+    {
+        try
+        {
+            db.Database.Migrate();
+            break;
+        }
+        catch (Exception ex) when (attempt < maxAttempts)
+        {
+            startupLogger.LogWarning(ex,
+                "Falha ao aplicar migrations (tentativa {Attempt}/{Max}). Nova tentativa em 5s...",
+                attempt, maxAttempts);
+            Thread.Sleep(TimeSpan.FromSeconds(5));
+        }
+    }
 }
 
 // ---------- Pipeline HTTP ----------

@@ -1,18 +1,12 @@
 #!/bin/bash
 set -e
 
-echo "Aguardando banco de dados..."
-until pg_isready -h postgres -U posfiap; do
-  echo "Aguardando PostgreSQL..."
-  sleep 2
-done
+# Plataformas como o Render informam a porta pela variável PORT.
+# Localmente (docker compose) ela não existe e usamos 8080.
+export ASPNETCORE_URLS="http://+:${PORT:-8080}"
 
-echo "PostgreSQL pronto!"
-
-# As migrations do EF Core já estão compiladas dentro da própria aplicação
-# (Migrations é código C#, não arquivos que precisam existir separadamente em runtime).
-# O Program.cs chama db.Database.Migrate() no startup, então não é necessário
-# nem correto usar a CLI `dotnet ef` aqui dentro do container publicado.
-
-echo "Iniciando aplicação (as migrações serão aplicadas automaticamente no startup)..."
+# Não esperamos mais o banco aqui: o docker-compose já usa depends_on com healthcheck,
+# e o Program.cs tenta aplicar as migrations algumas vezes antes de desistir
+# (o que também cobre bancos serverless como o Neon "acordando").
+echo "Iniciando aplicação na porta ${PORT:-8080}..."
 exec dotnet PosFiap.API.dll

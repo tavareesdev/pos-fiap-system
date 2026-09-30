@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Npgsql;
 using PosFiap.Application.Interfaces;
 using PosFiap.Application.UseCases.Auth;
 using PosFiap.Application.UseCases.StudySessions;
@@ -22,8 +23,8 @@ public static class DependencyInjection
     public static IServiceCollection AddInfrastructure(this IServiceCollection services, IConfiguration configuration)
     {
         // Persistência
-        services.AddDbContext<PosFiapDbContext>(options =>
-            options.UseNpgsql(configuration.GetConnectionString("DefaultConnection")));
+        var connectionString = NormalizeConnectionString(configuration.GetConnectionString("DefaultConnection"));
+        services.AddDbContext<PosFiapDbContext>(options => options.UseNpgsql(connectionString));
 
         services.AddScoped<IUnitOfWork>(sp => sp.GetRequiredService<PosFiapDbContext>());
         services.AddScoped<IUserRepository, UserRepository>();
@@ -56,5 +57,35 @@ public static class DependencyInjection
         services.AddScoped<ListStudySessionsUseCase>();
         services.AddScoped<GetStudySessionDetailUseCase>();
         return services;
+    }
+
+    /// <summary>
+    /// Aceita tanto o formato do Npgsql ("Host=...;Database=...") quanto a URL padrão que
+    /// Neon/Render/Heroku fornecem ("postgresql://usuario:senha@host/banco?sslmode=require").
+    /// No caso da URL, converte para o formato do Npgsql exigindo SSL.
+    /// </summary>
+    private static string? NormalizeConnectionString(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return raw;
+
+        var isUrl = raw.StartsWith("postgres://", StringComparison.OrdinalIgnoreCase)
+                    || raw.StartsWith("postgresql://", StringComparison.OrdinalIgnoreCase);
+        if (!isUrl) return raw;
+
+        var uri = new Uri(raw);
+        var userInfo = uri.UserInfo.Split(':', 2);
+
+        var builder = new NpgsqlConnectionStringBuilder
+        {
+            Host = uri.Host,
+            Port = uri.Port > 0 ? uri.Port : 5432,
+            Database = uri.AbsolutePath.TrimStart('/'),
+            Username = Uri.UnescapeDataString(userInfo[0]),
+            Password = userInfo.Length > 1 ? Uri.UnescapeDataString(userInfo[1]) : null,
+            SslMode = SslMode.Require,
+            TrustServerCertificate = true
+        };
+
+        return builder.ConnectionString;
     }
 }

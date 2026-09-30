@@ -1,0 +1,60 @@
+# Blueprint do Render para hospedar o sistema 100% no plano gratuito.
+# O banco PostgreSQL NÃO fica no Render (o Postgres grátis de lá expira em 30 dias):
+# use o Neon (https://neon.com) e cole a connection string quando o Render pedir.
+#
+# Como usar: Render Dashboard -> New -> Blueprint -> escolha este repositório.
+# Veja o passo a passo completo em DEPLOY_GRATIS.md.
+
+services:
+  # ---------------- Backend (.NET 8, via Docker) ----------------
+  - type: web
+    name: posfiap-api
+    runtime: docker
+    plan: free
+    # region: virginia   # descomente para ficar mais perto do Brasil (padrão: oregon)
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      # Cole a URL do Neon (postgresql://usuario:senha@host/banco?sslmode=require)
+      - key: ConnectionStrings__DefaultConnection
+        sync: false
+      # O Render gera uma chave aleatória segura
+      - key: Jwt__SecretKey
+        generateValue: true
+      - key: Jwt__Issuer
+        value: PosFiap.API
+      - key: Jwt__Audience
+        value: PosFiap.Frontend
+      # Sua chave da Groq (https://console.groq.com/keys)
+      - key: Groq__ApiKey
+        sync: false
+      - key: Groq__Model
+        value: openai/gpt-oss-120b
+      # Em produção só a URL do frontend deve ser aceita pelo CORS
+      - key: Cors__AllowLocalhost
+        value: "false"
+      # URL do frontend (https://SEU-FRONT.onrender.com), sem barra no final
+      - key: Cors__AllowedOrigins__0
+        sync: false
+
+  # ---------------- Frontend (React/Vite, site estático) ----------------
+  - type: web
+    name: posfiap-web
+    runtime: static
+    rootDir: frontend
+    buildCommand: npm install && npm run build
+    staticPublishPath: dist
+    autoDeploy: true
+    routes:
+      # SPA: qualquer rota cai no index.html (React Router)
+      - type: rewrite
+        source: /*
+        destination: /index.html
+    envVars:
+      # URL do backend + /api  (https://SEU-BACKEND.onrender.com/api)
+      - key: VITE_API_BASE_URL
+        sync: false
+      - key: NODE_VERSION
+        value: "20"

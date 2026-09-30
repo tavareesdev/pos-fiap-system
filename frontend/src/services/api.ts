@@ -24,8 +24,20 @@ api.interceptors.request.use((config) => {
 api.interceptors.response.use(
   (response) => response,
   (error: AxiosError<{ message?: string }>) => {
+    // Sem resposta = a requisição nem chegou a um servidor (API fora do ar, URL errada)
+    // ou o navegador bloqueou por CORS. A mensagem "Network Error" do axios não ajuda,
+    // então mostramos para onde o front tentou ligar e de qual origem.
+    if (!error.response) {
+      return Promise.reject(
+        new Error(
+          `Não foi possível falar com a API em ${API_BASE_URL}. ` +
+            `Confirme que o backend está no ar e que o CORS aceita ${window.location.origin}.`
+        )
+      );
+    }
+
     const message =
-      error.response?.data?.message ||
+      error.response.data?.message ||
       error.message ||
       'Ocorreu um erro inesperado. Tente novamente.';
     return Promise.reject(new Error(message));
