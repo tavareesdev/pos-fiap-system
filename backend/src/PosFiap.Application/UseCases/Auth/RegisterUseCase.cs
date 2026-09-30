@@ -46,6 +46,7 @@ public class RegisterUseCase
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
         var token = _jwtTokenGenerator.GenerateToken(user);
-        return new AuthResponseDto(token, user.Name, user.Email.Value, user.Id);
+        var refreshToken = _jwtTokenGenerator.GenerateRefreshToken(user);
+        return new AuthResponseDto(token, refreshToken, user.Name, user.Email.Value, user.Id);
     }
 }

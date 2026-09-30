@@ -9,7 +9,8 @@ using PosFiap.Domain.Entities;
 namespace PosFiap.Infrastructure.Auth;
 
 /// <summary>
-/// Implementação de IJwtTokenGenerator usando o padrão JWT Bearer.
+/// Gera access tokens de curta duração e refresh tokens de longa duração.
+/// O refresh token permite renovar a sessão sem pedir a senha novamente.
 /// </summary>
 public class JwtTokenGenerator : IJwtTokenGenerator
 {
@@ -19,11 +20,22 @@ public class JwtTokenGenerator : IJwtTokenGenerator
 
     public string GenerateToken(User user)
     {
+        return Generate(user, "access", DateTime.UtcNow.AddMinutes(_settings.ExpirationMinutes));
+    }
+
+    public string GenerateRefreshToken(User user)
+    {
+        return Generate(user, "refresh", DateTime.UtcNow.AddDays(_settings.RefreshTokenExpirationDays));
+    }
+
+    private string Generate(User user, string tokenType, DateTime expires)
+    {
         var claims = new[]
         {
             new Claim(JwtRegisteredClaimNames.Sub, user.Id.ToString()),
             new Claim(JwtRegisteredClaimNames.Email, user.Email.Value),
             new Claim("name", user.Name),
+            new Claim("token_type", tokenType),
             new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString())
         };
 
@@ -34,7 +46,7 @@ public class JwtTokenGenerator : IJwtTokenGenerator
             issuer: _settings.Issuer,
             audience: _settings.Audience,
             claims: claims,
-            expires: DateTime.UtcNow.AddMinutes(_settings.ExpirationMinutes),
+            expires: expires,
             signingCredentials: creds);
 
         return new JwtSecurityTokenHandler().WriteToken(token);

@@ -34,6 +34,7 @@ public class LoginUseCase
             throw new DomainException("E-mail ou senha inválidos.");
 
         var token = _jwtTokenGenerator.GenerateToken(user);
-        return new AuthResponseDto(token, user.Name, user.Email.Value, user.Id);
+        var refreshToken = _jwtTokenGenerator.GenerateRefreshToken(user);
+        return new AuthResponseDto(token, refreshToken, user.Name, user.Email.Value, user.Id);
     }
 }
