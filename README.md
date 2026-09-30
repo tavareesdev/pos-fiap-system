@@ -1,14 +1,46 @@
-# Pós FIAP · Resumo & Prova com IA
+# Pós FIAP · Resumo & Simulado com IA
 
-Sistema que recebe um `.zip` com os PDFs das aulas de uma disciplina de pós-graduação,
-envia o conteúdo para uma IA (via **Groq**, modelos abertos) e gera automaticamente:
+Aplicação full-stack que recebe um `.zip` com os PDFs das aulas de uma disciplina de
+pós-graduação e usa IA (**Groq**, modelos abertos) para gerar automaticamente:
 
-- Um **resumo consolidado** (Markdown) de todas as aulas.
-- Uma **prova de 20 questões de múltipla escolha** cobrindo todo o conteúdo.
+- um **resumo consolidado** (Markdown) de todas as aulas;
+- uma **prova de 20 questões de múltipla escolha** cobrindo o conteúdo, com gabarito e explicação.
+
+**Demo:** https://pos-system-cv.vercel.app
+> O backend roda em plano gratuito e "dorme" quando fica parado: o primeiro acesso pode levar cerca de 1 minuto.
+
+## Stack
+
+| Camada | Tecnologias |
+|---|---|
+| Backend | C# · .NET 8 · ASP.NET Core Web API · Entity Framework Core 8 · Swagger |
+| Arquitetura | Clean Architecture + DDD (aggregate root, value objects, casos de uso) |
+| Banco | PostgreSQL (Npgsql) |
+| Autenticação | JWT Bearer · senhas com BCrypt (work factor 12) |
+| IA | Groq API (`/chat/completions`, formato OpenAI) · modelo `openai/gpt-oss-120b` |
+| PDFs | PdfPig (extração de texto local) |
+| Frontend | React 18 · TypeScript · Vite · React Router · Axios · react-markdown |
+| DevOps | Docker (multi-stage) · Docker Compose · Nginx · Kubernetes (Kustomize, HPA, Ingress) |
+| Deploy gratuito | Render (API + site estático) · Neon (PostgreSQL) · Blueprint `render.yaml` |
+
+## Como a IA é usada
+
+O plano gratuito da Groq tem um limite baixo de tokens por minuto (inclusive por requisição),
+então mandar todos os PDFs de uma vez estoura o limite. A solução é uma estratégia **map-reduce**:
+
+1. **Map:** para cada PDF, o texto é extraído localmente (PdfPig, limitado a 10 mil caracteres por
+   aula) e a IA gera um resumo condensado daquele PDF isolado.
+2. **Reduce:** os resumos condensados são combinados em uma única chamada final que devolve, em
+   JSON estruturado (`response_format=json_object`), o resumo consolidado e as 20 questões.
+
+Detalhes de robustez: pausa entre chamadas para respeitar o limite por minuto, até 4 tentativas
+com ajuste de `max_tokens`/temperatura quando a resposta vem truncada ou inválida, e um resumo de
+contingência gerado a partir das notas individuais se a consolidação falhar. Na camada de domínio,
+`Exam.EnsureIsValid()` garante que uma sessão só vira `Concluido` com exatamente 20 questões válidas.
 
 ## Arquitetura
 
-**Backend** — C# / .NET 8, seguindo **Clean Architecture + DDD**:
+**Backend**, com a regra de dependência apontando sempre para dentro:
 
 ```
 backend/src/
@@ -19,16 +51,12 @@ backend/src/
 ```
 
 - `Domain` não depende de nenhuma outra camada.
-- `Application` depende só de `Domain` (define as *interfaces* que a Infra implementa —
-  Dependency Inversion).
-- `Infrastructure` implementa as portas definidas em `Application`.
-- `API` compõe tudo via injeção de dependência (`DependencyInjection.cs`).
+- `Application` depende só de `Domain` e define as *interfaces* que a Infra implementa (Dependency Inversion).
+- `Infrastructure` implementa essas portas; `API` compõe tudo via injeção de dependência (`DependencyInjection.cs`).
+- Aggregate root central: **`StudySession`** (um envio de `.zip`), que contém as `Lecture`s extraídas e,
+  ao final, o `Summary` e o `Exam`.
 
-Aggregate root central: **`StudySession`** — representa um envio de `.zip`, contém as
-`Lecture`s extraídas e, ao final do processamento, o `Summary` e o `Exam` (regra de
-negócio: a prova deve ter exatamente 20 questões válidas).
-
-**Frontend** — React + TypeScript (Vite):
+**Frontend:**
 
 ```
 frontend/src/
@@ -39,14 +67,27 @@ frontend/src/
 └── hooks/       # polling do status de processamento
 ```
 
+## API
+
+| Método | Rota | Descrição |
+|---|---|---|
+| POST | `/api/auth/register` | Cria conta e retorna o JWT |
+| POST | `/api/auth/login` | Autentica e retorna o JWT (validade de 8 h) |
+| POST | `/api/study-sessions/upload` | Envia o `.zip` (até 100 MB) e gera resumo + prova 🔒 |
+| GET | `/api/study-sessions` | Histórico de envios do usuário 🔒 |
+| GET | `/api/study-sessions/{id}` | Resumo e prova de uma sessão 🔒 |
+| GET | `/health` | Health check |
+
+🔒 = exige `Authorization: Bearer <token>`. Swagger em `/swagger`.
+
 ## Rodando localmente com Docker Compose
 
-1. Copie o arquivo de variáveis de ambiente:
+1. Copie as variáveis de ambiente:
    ```bash
    cp .env.example .env
    ```
-2. Edite `.env` e preencha `GROQ_API_KEY` (obtenha grátis em https://console.groq.com/keys),
-   além de `POSTGRES_PASSWORD` e `JWT_SECRET_KEY`.
+2. Edite o `.env`: `GROQ_API_KEY` (grátis em https://console.groq.com/keys), `POSTGRES_PASSWORD` e
+   `JWT_SECRET_KEY` (**mínimo de 32 caracteres**; gere uma com `openssl rand -base64 48`).
 3. Suba tudo:
    ```bash
    docker compose up --build
@@ -55,84 +96,81 @@ frontend/src/
    - Frontend: http://localhost:5173
    - API (Swagger): http://localhost:8080/swagger
 
-O backend aplica as *migrations* do EF Core automaticamente ao iniciar.
+As *migrations* do EF Core são aplicadas automaticamente ao iniciar o backend.
 
-## Rodando sem Docker (desenvolvimento)
+> Se você mudar `POSTGRES_PASSWORD` depois do primeiro `up`, rode `docker compose down -v` (apaga os
+> dados locais), pois o volume do banco guarda a senha antiga.
 
-**Backend**
+### Sem Docker (desenvolvimento)
+
+Precisa de um PostgreSQL local. Configure `ConnectionStrings:DefaultConnection`, `Groq:ApiKey` e
+`Jwt:SecretKey` em `appsettings.Development.json` ou com `dotnet user-secrets`.
+
 ```bash
+# Backend (o launchSettings usa a porta 5000)
 cd backend
-dotnet restore
-dotnet ef database update -p src/PosFiap.Infrastructure -s src/PosFiap.API   # cria o schema
 dotnet run --project src/PosFiap.API
-```
-Configure `Groq:ApiKey` e a connection string em
-`backend/src/PosFiap.API/appsettings.Development.json` ou via `dotnet user-secrets`.
 
-> Nota: o projeto não inclui a migration inicial gerada (`dotnet ef migrations add InitialCreate`),
-> pois isso depende do ambiente onde for gerada. Gere-a localmente antes do primeiro `dotnet ef database update`.
-
-**Frontend**
-```bash
+# Frontend
 cd frontend
 npm install
-cp .env.example .env   # ajuste VITE_API_BASE_URL se necessário
+cp .env.example .env   # ajuste VITE_API_BASE_URL (ex.: http://localhost:5000/api)
 npm run dev
 ```
 
+## Deploy gratuito (sem cartão e sem domínio pago)
+
+Backend e frontend no **Render**, banco no **Neon**, tudo com subdomínios gratuitos. O arquivo
+[`render.yaml`](render.yaml) descreve os dois serviços e o passo a passo completo está em
+[`DEPLOY_GRATIS.md`](DEPLOY_GRATIS.md).
+
+Variáveis principais do backend: `ConnectionStrings__DefaultConnection` (aceita a URL
+`postgresql://...` do Neon), `Jwt__SecretKey`, `Groq__ApiKey` e `Cors__AllowedOrigins__0`
+(URL do frontend). No frontend: `VITE_API_BASE_URL` (URL da API + `/api`, embutida no build).
+
 ## Deploy em Kubernetes
 
-Manifests em `k8s/` (também disponíveis via Kustomize):
+Manifests em `k8s/` (também via Kustomize): `Namespace`, `Secret`, `ConfigMap`, `StatefulSet` do
+Postgres com `PersistentVolumeClaim`, `Deployment`s do backend (com `HorizontalPodAutoscaler`, 2 a 6
+réplicas) e do frontend, `Service`s e `Ingress` com TLS opcional (cert-manager).
 
 ```bash
-# 1. Publique as imagens em um registry acessível pelo cluster
 docker build -t <seu-registry>/posfiap-backend:latest ./backend
 docker build -t <seu-registry>/posfiap-frontend:latest ./frontend \
   --build-arg VITE_API_BASE_URL=https://posfiap.exemplo.com/api
 docker push <seu-registry>/posfiap-backend:latest
 docker push <seu-registry>/posfiap-frontend:latest
 
-# 2. Atualize as imagens referenciadas em k8s/04-backend.yaml e k8s/05-frontend.yaml
-
-# 3. Edite k8s/01-secrets.yaml com valores reais (ou substitua por um cofre de secrets)
-#    e k8s/06-ingress.yaml com seu domínio real
-
-# 4. Aplique
+# Atualize as imagens em k8s/04-backend.yaml e k8s/05-frontend.yaml,
+# edite k8s/01-secrets.yaml e o domínio em k8s/06-ingress.yaml, e aplique:
 kubectl apply -k k8s/
 ```
 
-Recursos criados: `Namespace`, `Secret`, `ConfigMap`, `StatefulSet` do Postgres com
-`PersistentVolumeClaim`, `Deployment`s do backend (com `HorizontalPodAutoscaler`) e
-frontend, `Service`s e um `Ingress` com TLS (via cert-manager, opcional).
-
-⚠️ **Importante**: `k8s/01-secrets.yaml` está com valores de exemplo em texto puro apenas
-para fins didáticos. Em produção, use Sealed Secrets, External Secrets Operator ou um
-cofre gerenciado (Vault, AWS/GCP Secrets Manager) e nunca versione segredos reais.
+⚠️ `k8s/01-secrets.yaml` traz valores de exemplo em texto puro só para fins didáticos. Em produção use
+Sealed Secrets, External Secrets Operator ou um cofre gerenciado, e nunca versione segredos reais.
 
 ## Fluxo de uso
 
-1. Usuário cria conta / faz login (`/api/auth/register`, `/api/auth/login` → JWT).
-2. Na tela principal, arrasta o `.zip` com os PDFs das aulas para a *drop zone*.
-3. O backend extrai os PDFs, extrai o texto de cada um localmente (PdfPig) e envia
-   para a Groq (modelo aberto, via prompt) para gerar a saída em JSON estruturado
-   (resumo + 20 questões).
-4. O frontend faz *polling* do status (`Recebido` → `ExtraindoArquivos` →
-   `ProcessandoComIA` → `Concluido`/`Falhou`) e exibe o resumo e a prova interativa
-   assim que prontos.
-5. Histórico de envios anteriores fica disponível na barra lateral.
+1. O usuário cria conta ou faz login (JWT).
+2. Arrasta o `.zip` com os PDFs das aulas para a *drop zone*.
+3. O backend extrai os PDFs e o texto de cada um, e a IA gera o resumo e a prova (map-reduce, acima).
+4. A interface exibe o resumo e a prova interativa; o status (`Recebido` → `ExtraindoArquivos` →
+   `ProcessandoComIA` → `Concluido`/`Falhou`) pode ser acompanhado por *polling*.
+5. O histórico de envios fica disponível na barra lateral.
 
-## Principais decisões técnicas
+## Decisões técnicas
 
-- **DDD**: `StudySession` como aggregate root garante que `Lecture`, `Summary` e `Exam`
-  só sejam modificados de forma consistente (ex.: impossível marcar como `Concluido`
-  sem uma prova com exatamente 20 questões válidas — validado em `Exam.EnsureIsValid()`).
-- **Clean Architecture**: a regra de dependência aponta sempre para dentro
-  (`API → Infrastructure → Application → Domain`), permitindo trocar o provedor de IA,
-  o banco de dados ou o mecanismo de autenticação sem tocar no domínio.
-- **Groq**: chamado via REST (`/chat/completions`, compatível com o formato OpenAI),
-  usando um modelo aberto (Llama). O texto de cada PDF é extraído localmente com
-  PdfPig (Groq não recebe PDF nativamente) e enviado como parte do prompt, com
-  `response_format=json_object` e instruções explícitas de schema para obter JSON
-  confiável.
-- **Segurança**: senha com BCrypt (work factor 12), autenticação JWT Bearer, containers
-  rodando como usuário não-root, `Secret`s separados de `ConfigMap`s no Kubernetes.
+- **DDD:** `StudySession` como aggregate root mantém `Lecture`, `Summary` e `Exam` consistentes.
+- **Clean Architecture:** dá para trocar o provedor de IA, o banco ou a autenticação sem tocar no domínio.
+- **Map-reduce na IA:** contorna o limite de tokens do tier gratuito e mantém cada chamada pequena.
+- **Segurança:** senhas com BCrypt, JWT com validação de tamanho mínimo da chave no startup,
+  CORS restrito às origens configuradas em produção, segredos fora do código (variáveis de ambiente).
+
+## Limitações conhecidas e próximos passos
+
+- O envio do `.zip` é **síncrono**: a requisição só responde quando a IA termina. O próximo passo natural
+  é processar em segundo plano (fila/worker) e responder na hora.
+- PDFs escaneados (só imagem) não têm texto extraível; não há OCR.
+- Cada aula é limitada a 10 mil caracteres no resumo individual.
+- O tier gratuito da Groq limita requisições e tokens por minuto.
+- Ainda não há testes automatizados.
